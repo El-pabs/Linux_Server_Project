@@ -356,6 +356,24 @@ EOF
         chown -R "$CLIENT:$CLIENT" "$WEB_DIR"
         chmod 2775 "$WEB_DIR"
 
+        # Ajout du partage Samba privé pour l'utilisateur, si non déjà présent
+        if ! grep -q "^\[$CLIENT\]" /etc/samba/smb.conf; then
+            cat <<EOF | sudo tee -a /etc/samba/smb.conf > /dev/null
+
+[$CLIENT]
+    path = $WEB_DIR
+    valid users = $CLIENT
+    writable = yes
+    create mask = 0770
+    directory mask = 0770
+    force user = $CLIENT
+    force group = $CLIENT
+EOF
+        fi
+
+        sudo systemctl restart smb nmb
+
+
         if ! grep -q "^$CLIENT[[:space:]]\+IN[[:space:]]\+A" "$ZONE_FILE"; then
             echo "$CLIENT IN A $IP" | sudo tee -a "$ZONE_FILE" >/dev/null
         fi
