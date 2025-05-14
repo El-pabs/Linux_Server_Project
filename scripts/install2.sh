@@ -424,6 +424,7 @@ EOF
         dnf install -y mod_ssl
         CLIENT=$1
         DOMAIN=$2
+        MARIADB_ROOT_PASSWORD="$3"
         WEB_DIR="$WEB_ROOT/$CLIENT"
         SUBDOMAIN="$CLIENT.$DOMAIN"
         DB_NAME="${CLIENT}_db"
@@ -531,7 +532,7 @@ EOF
 EOF
         chown "$CLIENT:$CLIENT" "$WEB_DIR/index.php"
 
-        mysql -u root <<MYSQL_SCRIPT
+        mysql -u root -p"$MARIADB_ROOT_PASSWORD" <<MYSQL_SCRIPT
 CREATE DATABASE IF NOT EXISTS $DB_NAME;
 CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
 GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';
@@ -552,7 +553,6 @@ MYSQL_SCRIPT
         -keyout /etc/pki/tls/private/vsftpd.key \
         -out /etc/pki/tls/certs/vsftpd.pem \
         -subj "/C=BE/ST=Hainaut/L=Mons/O=inox.lan/CN=ftp.$DOMAIN"
-
 
         sudo mkdir -p /srv/samba/public
         sudo chmod 0777 /srv/samba/public
@@ -603,7 +603,7 @@ EOF
         sudo systemctl restart vsftpd
         sudo systemctl restart smb nmb
 
-    cat > /etc/vsftpd/vsftpd.conf <<EOF
+        cat > /etc/vsftpd/vsftpd.conf <<EOF
 ftpd_banner=Bienvenue sur le serveur FTP sécurisé.
 xferlog_enable=YES
 anonymous_enable=NO
@@ -634,26 +634,24 @@ ssl_sslv3=NO
 require_ssl_reuse=NO
 EOF
 
-    systemctl restart vsftpd
-
+        systemctl restart vsftpd
 
         echo "======== $SUBDOMAIN ========"
         echo "Web: http://$SUBDOMAIN"
         echo "FTP/Samba: $CLIENT/$USER_PASS"
         echo "MySQL: $DB_USER/$DB_PASS"
-}
+    }
 
     generate_ssl_cert() {
-    DOMAIN=$1
-    mkdir -p /etc/pki/tls/certs /etc/pki/tls/private
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-        -keyout "/etc/pki/tls/private/$DOMAIN.key" \
-        -out "/etc/pki/tls/certs/$DOMAIN.crt" \
-        -subj "/C=FR/ST=Default/L=Default/O=Default/CN=$DOMAIN"
-}
+        DOMAIN=$1
+        mkdir -p /etc/pki/tls/certs /etc/pki/tls/private
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout "/etc/pki/tls/private/$DOMAIN.key" \
+            -out "/etc/pki/tls/certs/$DOMAIN.crt" \
+            -subj "/C=FR/ST=Default/L=Default/O=Default/CN=$DOMAIN"
+    }
 
     log() { echo "[+] $1"; }
-
 
     if [ "$EUID" -ne 0 ]; then
         echo "Exécutez en tant que root !" >&2
@@ -676,7 +674,6 @@ EOF
             return 1
             ;;
     esac
-
     read -p "Nom du client (ex: client1) : " CLIENT
     read -p "Domaine (ex: test.lan) : " DOMAIN
 
@@ -688,19 +685,47 @@ EOF
     if [ "$MODE" = "full" ]; then
         dnf install -y --allowerasing curl
         dnf install -y bind httpd mariadb105-server vsftpd samba php-fpm php-mysqlnd
+        
+        # Ajout de la configuration sécurisée de MariaDB
+        read -s -p "Entrez le mot de passe root : " MARIADB_ROOT_PASSWORD
+        echo
+        read -s -p "Confirmez le mot de passe root : " MARIADB_ROOT_PASSWORD_CONFIRM
+        echo
+        # Vérifie que les deux mots de passe sont identiques
+        if [ "$MARIADB_ROOT_PASSWORD" != "$MARIADB_ROOT_PASSWORD_CONFIRM" ]; then
+            echo "Les mots de passe ne correspondent pas. Abandon."
+            exit 1
+        fi
+        # Création mdp root dans MariaDB
+        sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$MARIADB_ROOT_PASSWORD'; FLUSH PRIVILEGES;"
+        echo "[*] Configuration sécurisée de MariaDB..."
+        # Génère les commandes attendues par mysql_secure_installation
+        sudo mysql_secure_installation <<EOF
+$MARIADB_ROOT_PASSWORD
+n
+n
+Y
+Y
+Y
+Y
+EOF
+        echo "[+] mysql_secure_installation terminé avec succès."
+
         fix_firewall
         fix_resolv_conf
         fix_apache_servername
         systemctl enable --now named httpd mariadb vsftpd smb nmb php-fpm
         configure_dns "$DOMAIN"
-        create_user "$CLIENT" "$DOMAIN"
+        create_user "$CLIENT" "$DOMAIN" "$MARIADB_ROOT_PASSWORD"
         systemctl restart httpd
     elif [ "$MODE" = "user" ]; then
+        read -s -p "Entrez le mot de passe root MariaDB : " MARIADB_ROOT_PASSWORD
+        echo
         fix_firewall
         fix_resolv_conf
         fix_apache_servername
         systemctl enable --now named httpd mariadb vsftpd smb nmb php-fpm
-        create_user "$CLIENT" "$DOMAIN"
+        create_user "$CLIENT" "$DOMAIN" "$MARIADB_ROOT_PASSWORD"
         systemctl restart httpd
     fi
 
@@ -709,7 +734,6 @@ EOF
     echo "Press any key to continue..."
     read -n 1 -s key
 }
-
 
 
 
