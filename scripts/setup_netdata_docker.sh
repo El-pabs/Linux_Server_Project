@@ -1,4 +1,3 @@
-[ec2-user@livio ~]$ cat setup_netdata_docker.sh
 #!/bin/bash
 
 echo "Installation de Docker (si pas déjà installé)..."
@@ -35,4 +34,3 @@ fi
 
 echo "Netdata installé. Accès : http://$(hostname -I | awk '{print $1}'):19999"
 echo "Déconnecte puis reconnecte ta session SSH pour que ec2-user puisse lancer Docker sans sudo."
-[ec2-user@livio ~]$
