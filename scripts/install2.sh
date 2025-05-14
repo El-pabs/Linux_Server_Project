@@ -14,7 +14,6 @@ systemctl enable --now firewalld
 systemctl start firewalld
 firewall-cmd --permanent --zone=public --add-service=cockpit
 firewall-cmd --reload
-dnf install -y clamav-update clamav-scanner-systemd
 
 dnf -y install nfs-utils samba mlocate bind chrony fail2ban vsftpd rsync clamav clamav-scanner-systemd clamav-update cockpit bind-utils httpd php php-mysqlnd mariadb-server phpmyadmin
 
@@ -155,8 +154,8 @@ raid(){
     lsblk -d -o NAME,SIZE,TYPE | grep disk
     echo
 
-    # Demander à l'utilisateur les disques à utiliser (ex: sdb sdc)
-    read -p "Entrez les disques à utiliser pour le RAID (ex: sdb sdc) : " DISKS
+    # Demander à l'utilisateur les disques à utiliser (ex: sdb sdc sdd)
+    read -p "Entrez les disques à utiliser pour le RAID (ex: sdb sdc sdd) : " DISKS
     RAID_DISKS=""
     for disk in $DISKS; do
         RAID_DISKS="$RAID_DISKS /dev/$disk"
@@ -165,35 +164,35 @@ raid(){
     # Installer les outils nécessaires
     sudo dnf install lvm2 mdadm -y
 
-    # Créer le RAID 1 (miroir)
-    sudo mdadm --create --verbose --run --metadata=1.2 $RAID_DEVICE --level=1 --raid-devices=$(echo $DISKS | wc -w) $RAID_DISKS
+    # Créer le RAID
+    sudo mdadm --create --verbose $RAID_DEVICE --level=5 --raid-devices=$(echo $DISKS | wc -w) $RAID_DISKS
 
     # LVM et formatage
     sudo pvcreate $RAID_DEVICE
-    sudo vgcreate vg_raid1 $RAID_DEVICE
+    sudo vgcreate vg_raid5 $RAID_DEVICE
 
     # Partition pour les partages
-    sudo lvcreate -L 500M -n share vg_raid1
-    sudo mkfs.ext4 /dev/vg_raid1/share
-    sudo mkdir -p /mnt/raid1_share
-    sudo mount -o noexec,nosuid,nodev /dev/vg_raid1/share /mnt/raid1_share
-    sudo blkid /dev/vg_raid1/share | awk '{print $2 " /mnt/raid1_share ext4 defaults 0 0"}' | sudo tee -a /etc/fstab
+    sudo lvcreate -L 500M -n share vg_raid5
+    sudo mkfs.ext4 /dev/vg_raid5/share
+    sudo mkdir -p /mnt/raid5_share
+    sudo mount -o noexec,nosuid,nodev /dev/vg_raid5/share /mnt/raid5_share
+    sudo blkid /dev/vg_raid5/share | awk '{print $2 " /mnt/raid5_share ext4 defaults 0 0"}' | sudo tee -a /etc/fstab
 
     # Partition pour le web
-    sudo lvcreate -L 500M -n web vg_raid1
-    sudo mkfs.ext4 /dev/vg_raid1/web
-    sudo mkdir -p /mnt/raid1_web
-    sudo mount -o noexec,nosuid,nodev /dev/vg_raid1/web /mnt/raid1_web
-    sudo blkid /dev/vg_raid1/web | awk '{print $2 " /mnt/raid1_web ext4 defaults 0 0"}' | sudo tee -a /etc/fstab
+    sudo lvcreate -L 500M -n web vg_raid5
+    sudo mkfs.ext4 /dev/vg_raid5/web
+    sudo mkdir -p /mnt/raid5_web
+    sudo mount -o noexec,nosuid,nodev /dev/vg_raid5/web /mnt/raid5_web
+    sudo blkid /dev/vg_raid5/web | awk '{print $2 " /mnt/raid5_web ext4 defaults 0 0"}' | sudo tee -a /etc/fstab
 
     # Partition dédiée au backup
-    sudo lvcreate -L 500M -n backup vg_raid1
-    sudo mkfs.ext4 /dev/vg_raid1/backup
-    sudo mkdir -p /mnt/raid1_backup
-    sudo mount -o noexec,nosuid,nodev /dev/vg_raid1/backup /mnt/raid1_backup
-    sudo blkid /dev/vg_raid1/backup | awk '{print $2 " /mnt/raid1_backup ext4 defaults 0 0"}' | sudo tee -a /etc/fstab
+    sudo lvcreate -L 500M -n backup vg_raid5
+    sudo mkfs.ext4 /dev/vg_raid5/backup
+    sudo mkdir -p /mnt/raid5_backup
+    sudo mount -o noexec,nosuid,nodev /dev/vg_raid5/backup /mnt/raid5_backup
+    sudo blkid /dev/vg_raid5/backup | awk '{print $2 " /mnt/raid5_backup ext4 defaults 0 0"}' | sudo tee -a /etc/fstab
 
-    echo "Le dossier de backup est prêt : /mnt/raid1_backup"
+    echo "Le dossier de backup est prêt : /mnt/raid5_backup"
     echo "Utilise ce chemin comme destination dans ton script de sauvegarde."
     systemctl daemon-reload
     df -h
@@ -203,11 +202,11 @@ raid(){
 unauthshare(){
     smb(){
     echo "Installing Samba share"
-    sudo mkdir -p /mnt/raid1_share
+    sudo mkdir -p /mnt/raid5_share
 
-    quotacheck -cug /mnt/raid1_share
-    quotaon /mnt/raid1_share
-    edquota -u nobody -f /mnt/raid1_share -s 500M -h 600M
+    quotacheck -cug /mnt/raid5_share
+    quotaon /mnt/raid5_share
+    edquota -u nobody -f /mnt/raid5_share -s 500M -h 600M
     dnf update -y
     dnf -y install samba samba-client
     systemctl enable smb --now
@@ -216,12 +215,12 @@ unauthshare(){
     firewall-cmd --permanent --add-service=samba
     firewall-cmd --reload
 
-    chown -R nobody:nobody /mnt/raid1_share
-    chmod -R 0777 /mnt/raid1_share
+    chown -R nobody:nobody /mnt/raid5_share
+    chmod -R 0777 /mnt/raid5_share
     
     cat <<EOL > /etc/samba/smb.unauth.conf
 [unauth_share]
-   path = /mnt/raid1_share/
+   path = /mnt/raid5_share/
    browsable = yes
    writable = yes
    guest ok = yes
@@ -244,7 +243,7 @@ EOL
     fi
 
     # SELINUX 
-    /sbin/restorecon -R -v /mnt/raid1_share
+    /sbin/restorecon -R -v /mnt/raid5_share
     setsebool -P samba_export_all_rw 1
 
     systemctl restart smb
@@ -259,7 +258,7 @@ EOL
 
 nfs(){
     echo "Installing NFS share"
-    sudo mkdir -p /mnt/raid1_share
+    sudo mkdir -p /mnt/raid5_share
     dnf update -y
     dnf -y install nfs-utils
     systemctl enable nfs-server --now
@@ -267,7 +266,7 @@ nfs(){
     firewall-cmd --permanent --add-service=mountd
     firewall-cmd --permanent --add-service=rpc-bind
     firewall-cmd --reload
-    echo "/mnt/raid1_share *(rw,sync,root_squash)" > /etc/exports
+    echo "/mnt/raid5_share *(rw,sync,root_squash)" > /etc/exports
     exportfs -a
     systemctl restart nfs-server
     echo "NFS services restarted"
@@ -378,8 +377,11 @@ webservices() {
 
     configure_dns() {
         DOMAIN=$1
-        IP=$(curl -s ifconfig.me)
+        IP=$(hostname -I | awk '{print $1}')
+        IPReverse="$(echo $IP | awk -F. '{print $3"."$2"."$1".in-addr.arpa"}')"
         ZONE_FILE="$DNS_ZONE_DIR/$DOMAIN.db"
+        REVERSE_ZONE_FILE="$DNS_ZONE_DIR/$IPReverse"
+        last_octet=$(echo $IP | cut -d. -f4)
 
         log "Configuration DNS pour $DOMAIN"
 
@@ -399,6 +401,20 @@ webservices() {
 ns1 IN  A   $IP
 *   IN  A   $IP
 EOF
+
+sudo tee "$REVERSE_ZONE_FILE" > /dev/null <<EOF
+\$TTL 86400
+@   IN  SOA ns1.${DOMAIN}. admin.${DOMAIN}. (
+        $(date +%Y%m%d%H) ; Serial
+        3600    ; Refresh
+        1800    ; Retry
+        1209600 ; Expire
+        86400 ) ; Minimum TTL
+
+@       IN  NS  ns1.${DOMAIN}.
+$last_octet      IN  PTR ns1.${DOMAIN}.
+EOF
+
             sudo chown named:named "$ZONE_FILE"
             sudo chmod 640 "$ZONE_FILE"
         fi
@@ -409,6 +425,12 @@ zone "$DOMAIN" {
     type master;
     file "$ZONE_FILE";
 };
+
+zone "$IPReverse" IN {
+    type master;
+    file "$REVERSE_ZONE_FILE";
+};
+
 EOF
         fi
 
@@ -431,7 +453,7 @@ EOF
         DB_USER="${CLIENT}_user"
         DB_PASS="sherpa"
         USER_PASS="sherpa"
-        IP=$(curl -s ifconfig.me)
+        IP=$(hostname -I | awk '{print $1}')
         ZONE_FILE="$DNS_ZONE_DIR/$DOMAIN.db"
 
         log "Création de $CLIENT.$DOMAIN"
@@ -593,7 +615,7 @@ EOF
         sudo systemctl restart smb nmb
 
         if ! grep -q "/srv/samba/public" /etc/exports; then
-            echo "/srv/samba/public *(rw,sync,no_subtree_check,no_root_squash)" | sudo tee -a /etc/exports
+            echo "/srv/samba/public *(rw,sync,no_subtree_check,root_squash)" | sudo tee -a /etc/exports
             sudo exportfs -ra
             sudo systemctl enable --now nfs-server
         fi
@@ -674,6 +696,7 @@ EOF
             return 1
             ;;
     esac
+
     read -p "Nom du client (ex: client1) : " CLIENT
     read -p "Domaine (ex: test.lan) : " DOMAIN
 
@@ -685,21 +708,18 @@ EOF
     if [ "$MODE" = "full" ]; then
         dnf install -y --allowerasing curl
         dnf install -y bind httpd mariadb105-server vsftpd samba php-fpm php-mysqlnd
-        
+
         # Ajout de la configuration sécurisée de MariaDB
-        read -s -p "Entrez le mot de passe root : " MARIADB_ROOT_PASSWORD
+        read -s -p "Entrez le mot de passe root pour MariaDB : " MARIADB_ROOT_PASSWORD
         echo
-        read -s -p "Confirmez le mot de passe root : " MARIADB_ROOT_PASSWORD_CONFIRM
+        read -s -p "Confirmez le mot de passe : " MARIADB_ROOT_PASSWORD_CONFIRM
         echo
-        # Vérifie que les deux mots de passe sont identiques
         if [ "$MARIADB_ROOT_PASSWORD" != "$MARIADB_ROOT_PASSWORD_CONFIRM" ]; then
             echo "Les mots de passe ne correspondent pas. Abandon."
             exit 1
         fi
-        # Création mdp root dans MariaDB
         sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$MARIADB_ROOT_PASSWORD'; FLUSH PRIVILEGES;"
         echo "[*] Configuration sécurisée de MariaDB..."
-        # Génère les commandes attendues par mysql_secure_installation
         sudo mysql_secure_installation <<EOF
 $MARIADB_ROOT_PASSWORD
 n
@@ -734,6 +754,8 @@ EOF
     echo "Press any key to continue..."
     read -n 1 -s key
 }
+
+
 
 
 
@@ -962,8 +984,8 @@ BACKUP_DIR="$MOUNT_POINT/\$TIMESTAMP"
 mkdir -p "\$BACKUP_DIR"
 
 echo "\$(date) - Début sauvegarde" >> "\$LOG_FILE"
-rsync -avz /mnt/raid1_share "\$BACKUP_DIR/" >> "\$LOG_FILE" 2>&1
-rsync -avz /mnt/raid1_web "\$BACKUP_DIR/" >> "\$LOG_FILE" 2>&1
+rsync -avz /mnt/raid5_share "\$BACKUP_DIR/" >> "\$LOG_FILE" 2>&1
+rsync -avz /mnt/raid5_web "\$BACKUP_DIR/" >> "\$LOG_FILE" 2>&1
 
 mkdir -p "\$BACKUP_DIR/user_databases"
 while IFS= read -r USERNAME; do

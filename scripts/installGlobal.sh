@@ -903,42 +903,58 @@ configure_clamav(){
     read -n 1 -s key
     clear
 }
-    configure_fail2ban() {
-        # Install Fail2Ban
-        dnf install fail2ban -y
+configure_fail2ban() {
+    echo "Installing Fail2Ban..."
 
-        # Configure Fail2Ban for SSH
-        cat <<EOL > /etc/fail2ban/jail.d/sshd.local
-    [sshd]
-    enabled = true
-    port = ssh
-    filter = sshd
-    logpath = /var/log/secure
-    maxretry = 3
-    bantime = 3600
-    EOL
+    # Check if Fail2Ban is already installed
+    if ! command -v fail2ban-server &> /dev/null; then
+        sudo dnf install -y fail2ban || { echo "Failed to install Fail2Ban. Exiting."; exit 1; }
+    else
+        echo "Fail2Ban is already installed."
+    fi
 
-        # Configure Fail2Ban for Fedora Cockpit
-        cat <<EOL > /etc/fail2ban/jail.d/cockpit.local
-    [cockpit]
-    enabled = true
-    port = http,https
-    filter = cockpit
-    logpath = /var/log/secure
-    maxretry = 3
-    bantime = 3600
-EOL
+    # Enable and start the Fail2Ban service
+    sudo systemctl enable fail2ban || { echo "Failed to enable Fail2Ban. Exiting."; exit 1; }
+    sudo systemctl start fail2ban || { echo "Failed to start Fail2Ban. Exiting."; exit 1; }
 
-        # Restart Fail2Ban service
-        systemctl enable --now fail2ban
+    # Create the configuration directory if necessary
+    sudo mkdir -p /etc/fail2ban/jail.d
 
-        echo "Fail2Ban configured for SSH and Fedora Cockpit."
-        echo "Press any key to continue..."
-        read -n 1 -s key
-    }
-    configure_clamav
-    configure_fail2ban
+    # Configure Fail2Ban to protect the SSH service
+    cat <<EOF | sudo tee /etc/fail2ban/jail.d/sshd.local > /dev/null
+[sshd]
+enabled = true
+port = 22
+action = %(action_mwl)s
+logpath = %(sshd_log)s
+maxretry = 3
+bantime = 600
+findtime = 600
+EOF
 
+    # Configure Fail2Ban to protect the FTP service
+    cat <<EOF | sudo tee /etc/fail2ban/jail.d/vsftpd.local > /dev/null
+[vsftpd]
+enabled = true
+port = 21
+action = %(action_mwl)s
+logpath = /var/log/vsftpd.log
+maxretry = 3
+bantime = 600
+findtime = 600
+EOF
+
+    # Add IPs to whitelist
+    # Whitelist IP admin SSH
+    echo "ignoreip = 192.168.42.2" | sudo tee -a /etc/fail2ban/jail.d/sshd.local > /dev/null
+
+    # Whitelist IP admin FTP
+    echo "ignoreip = 192.168.1.101" | sudo tee -a /etc/fail2ban/jail.d/vsftpd.local > /dev/null
+
+    # Restart Fail2Ban to apply the changes
+    sudo systemctl restart fail2ban || { echo "Failed to restart Fail2Ban. Exiting."; exit 1; }
+
+    echo "Fail2Ban installed and configured successfully."
 }
 
 
