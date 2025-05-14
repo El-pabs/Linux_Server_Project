@@ -438,6 +438,10 @@ EOF
         sudo sed -i 's/listen-on-v6 port 53.*/listen-on-v6 port 53 { any; };/' "$DNS_CONF"
         sudo sed -i 's/allow-query.*/allow-query     { any; };/' "$DNS_CONF"
 
+        if ! grep -q "recursion yes;" "$DNS_CONF"; then
+            sudo sed -i '/^options\s*{.*/a\    recursion yes;\n    allow-recursion { 127.0.0.1; localhost; 192.168.0.0/16; 10.0.0.0/8; };\n    forwarders { 8.8.8.8; 1.1.1.1; };\n' "$DNS_CONF"
+        fi
+
         sudo named-checkzone "$DOMAIN" "$ZONE_FILE"
         sudo systemctl restart named
     }
@@ -756,9 +760,6 @@ EOF
 }
 
 
-
-
-
 ntp(){
     clear
     echo "Starting ntp"
@@ -870,39 +871,6 @@ timezone_display() {
 }
 
 security(){
-
-configure_clamav(){
-    clear
-    # Install ClamAV
-    dnf update -y
-    dnf install clamav -y
-    # Update ClamAV database
-    freshclam
-    echo "Clamav virus definitions updated successfully."
-    echo "Note : ClamAV is up to date, but the installed version may not be the lastest available."
-    # Schedule regular scans
-    # Edit the crontab file and add the daily scan command
-    echo "0 2 * * * clamscan -r /" | sudo tee -a /etc/crontab
-    # Enable automatic scanning on file access
-    systemctl enable clamav-freshclam
-    systemctl enable clamd@scan
-    # Start ClamAV service
-    systemctl start clamav-freshclam
-    systemctl start clamd@scan
-    # Verify ClamAV status
-    systemctl status clamav-freshclam
-    systemctl status clamd@scan
-    # Configure ClamAV for local socket scanning
-    sed -i 's/^#LocalSocket /LocalSocket /' /etc/clamd.d/scan.conf
-    sed -i 's/^TCPSocket /#TCPSocket /' /etc/clamd.d/scan.conf
-    # Restart ClamAV service to apply changes
-    systemctl restart clamd@scan
-
-    echo "Clamav Done..."
-    echo "Press any key to continue..."
-    read -n 1 -s key
-    clear
-}
 configure_fail2ban() {
     echo "Installing Fail2Ban..."
 
@@ -955,8 +923,10 @@ EOF
     sudo systemctl restart fail2ban || { echo "Failed to restart Fail2Ban. Exiting."; exit 1; }
 
     echo "Fail2Ban installed and configured successfully."
-}
+    }
 
+    configure_fail2ban
+}
 
 backup(){
     clear
