@@ -169,25 +169,34 @@ raid(){
     # LVM et formatage
     sudo pvcreate $RAID_DEVICE
     sudo vgcreate vg_raid5 $RAID_DEVICE
+
+    # Partition pour les partages
     sudo lvcreate -L 500M -n share vg_raid5
     sudo mkfs.ext4 /dev/vg_raid5/share
     sudo mkdir -p /mnt/raid5_share
     sudo mount -o noexec,nosuid,nodev /dev/vg_raid5/share /mnt/raid5_share
     sudo blkid /dev/vg_raid5/share | awk '{print $2 " /mnt/raid5_share ext4 defaults 0 0"}' | sudo tee -a /etc/fstab
 
+    # Partition pour le web
     sudo lvcreate -L 500M -n web vg_raid5
     sudo mkfs.ext4 /dev/vg_raid5/web
     sudo mkdir -p /mnt/raid5_web
     sudo mount -o noexec,nosuid,nodev /dev/vg_raid5/web /mnt/raid5_web
     sudo blkid /dev/vg_raid5/web | awk '{print $2 " /mnt/raid5_web ext4 defaults 0 0"}' | sudo tee -a /etc/fstab
 
+    # Partition dédiée au backup
+    sudo lvcreate -L 500M -n backup vg_raid5
+    sudo mkfs.ext4 /dev/vg_raid5/backup
+    sudo mkdir -p /mnt/raid5_backup
+    sudo mount -o noexec,nosuid,nodev /dev/vg_raid5/backup /mnt/raid5_backup
+    sudo blkid /dev/vg_raid5/backup | awk '{print $2 " /mnt/raid5_backup ext4 defaults 0 0"}' | sudo tee -a /etc/fstab
+
+    echo "Le dossier de backup est prêt : /mnt/raid5_backup"
+    echo "Utilise ce chemin comme destination dans ton script de sauvegarde."
     systemctl daemon-reload
     df -h
     read -n 1 -s -p "Appuyez sur une touche pour continuer..."
 }
-
-
-
 
 unauthshare(){
     smb(){
@@ -763,50 +772,56 @@ EOL
 backup(){
     clear
     echo "🛠️ Configuration des sauvegardes automatiques (systemd timers)"
+    echo
+    echo "Détection des volumes RAID disponibles :"
+    sudo mdadm --detail --scan
+    echo
+    echo "Conseil : Il est recommandé de stocker la sauvegarde sur un volume RAID pour plus de sécurité."
+    echo
 
-    # Créer le script de backup
-    sudo tee /usr/local/bin/auto_backup.sh > /dev/null <<'EOF'
+    echo "Points de montage disponibles pour la sauvegarde :"
+    # Liste uniquement les points de montage montés sur un dossier (commençant par /)
+    options=()
+    mapfile -t options < <(lsblk -o MOUNTPOINT,NAME,FSTYPE,SIZE -nr | awk '$1 ~ /^\// {print $1 " (" $2 " " $3 " " $4 ")"}')
+    options+=("Entrer un chemin personnalisé")
+    PS3="Sélectionnez le point de montage pour le backup : "
+    select MOUNT_CHOICE in "${options[@]}"; do
+        if [[ -n "$MOUNT_CHOICE" ]]; then
+            if [[ "$MOUNT_CHOICE" == "Entrer un chemin personnalisé" ]]; then
+                read -p "Entrez le chemin absolu du dossier de backup : " MOUNT_POINT
+            else
+                MOUNT_POINT=$(echo "$MOUNT_CHOICE" | awk '{print $1}')
+            fi
+            break
+        else
+            echo "Sélection invalide. Essayez encore."
+        fi
+    done
+
+    echo "Le backup sera effectué dans : $MOUNT_POINT"
+    sudo mkdir -p "$MOUNT_POINT"
+
+    # Créer le script de backup avec le bon point de montage
+    sudo tee /usr/local/bin/auto_backup.sh > /dev/null <<EOF
 #!/bin/bash
 
-# Configuration
-LOG_FILE="/mnt/backup/backup.log"
-MOUNT_POINT="/mnt/backup"
+LOG_FILE="$MOUNT_POINT/backup.log"
+TIMESTAMP=\$(date +"%Y-%m-%d_%H-%M-%S")
+BACKUP_DIR="$MOUNT_POINT/\$TIMESTAMP"
+mkdir -p "\$BACKUP_DIR"
 
-# Identifier le disque de backup non monté
-BACKUP_DISK=$(lsblk -lnpo NAME,MOUNTPOINT | awk '$2==""{print $1; exit}')
-[ -z "$BACKUP_DISK" ] && { echo "$(date) - Aucun disque de backup disponible" >> "$LOG_FILE"; exit 1; }
+echo "\$(date) - Début sauvegarde" >> "\$LOG_FILE"
+rsync -avz /mnt/raid5_share "\$BACKUP_DIR/" >> "\$LOG_FILE" 2>&1
+rsync -avz /mnt/raid5_web "\$BACKUP_DIR/" >> "\$LOG_FILE" 2>&1
 
-# Configurer le montage persistant via UUID
-UUID=$(blkid -s UUID -o value "$BACKUP_DISK")
-mkdir -p "$MOUNT_POINT"
-
-if ! grep -q "$MOUNT_POINT" /etc/fstab; then
-    echo "UUID=$UUID $MOUNT_POINT ext4 defaults,noexec,nosuid,nodev,nofail 0 2" | sudo tee -a /etc/fstab
-fi
-
-# Monter le disque
-mountpoint -q "$MOUNT_POINT" || mount "$MOUNT_POINT"
-
-# Créer le dossier de backup
-TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
-BACKUP_DIR="$MOUNT_POINT/$TIMESTAMP"
-mkdir -p "$BACKUP_DIR"
-
-# Sauvegarder les données
-echo "$(date) - Début sauvegarde" >> "$LOG_FILE"
-rsync -avz /mnt/raid5_share "$BACKUP_DIR/" >> "$LOG_FILE" 2>&1
-rsync -avz /mnt/raid5_web "$BACKUP_DIR/" >> "$LOG_FILE" 2>&1
-
-# Sauvegarder les bases de données
-mkdir -p "$BACKUP_DIR/user_databases"
+mkdir -p "\$BACKUP_DIR/user_databases"
 while IFS= read -r USERNAME; do
-    mysqldump -u root -prootpassword "${USERNAME}_db" > "$BACKUP_DIR/user_databases/${USERNAME}_db.sql" 2>> "$LOG_FILE"
+    mysqldump -u root -prootpassword "\${USERNAME}_db" > "\$BACKUP_DIR/user_databases/\${USERNAME}_db.sql" 2>> "\$LOG_FILE"
 done < <(pdbedit -L | cut -d: -f1)
 
-echo "$(date) - Sauvegarde terminée" >> "$LOG_FILE"
+echo "\$(date) - Sauvegarde terminée" >> "\$LOG_FILE"
 EOF
 
-    # Permissions
     sudo chmod +x /usr/local/bin/auto_backup.sh
 
     # Créer le service systemd
@@ -834,20 +849,20 @@ AccuracySec=1s
 WantedBy=timers.target
 EOF
 
-    # Activer le timer
     sudo systemctl daemon-reload
     sudo systemctl enable --now backup.timer
 
-    # Nettoyer l'ancienne config cron
     crontab -l | grep -v "auto_backup.sh" | crontab -
 
+    echo
     echo "✅ Sauvegarde configurée avec succès !"
-    echo "▪ Intervalle: Toutes les 1h58"
-    echo "▪ Montage persistant: UUID dans /etc/fstab"
-    echo "▪ Logs: /mnt/backup/backup.log"
-    echo "▪ Status: systemctl status backup.timer"
+    echo "▪ Destination : $MOUNT_POINT"
+    echo "▪ Intervalle : Toutes les 1h58"
+    echo "▪ Logs : $MOUNT_POINT/backup.log"
+    echo "▪ Status : systemctl status backup.timer"
     read -n 1 -s -p "Appuyez sur une touche pour continuer..."
 }
+
 
 
 BLUE='\e[38;5;33m'
