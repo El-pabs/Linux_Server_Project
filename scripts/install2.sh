@@ -155,8 +155,8 @@ raid(){
     lsblk -d -o NAME,SIZE,TYPE | grep disk
     echo
 
-    # Demander à l'utilisateur les disques à utiliser (ex: sdb sdc sdd)
-    read -p "Entrez les disques à utiliser pour le RAID (ex: sdb sdc sdd) : " DISKS
+    # Demander à l'utilisateur les disques à utiliser (ex: sdb sdc)
+    read -p "Entrez les disques à utiliser pour le RAID (ex: sdb sdc) : " DISKS
     RAID_DISKS=""
     for disk in $DISKS; do
         RAID_DISKS="$RAID_DISKS /dev/$disk"
@@ -165,35 +165,35 @@ raid(){
     # Installer les outils nécessaires
     sudo dnf install lvm2 mdadm -y
 
-    # Créer le RAID
-    sudo mdadm --create --verbose $RAID_DEVICE --level=5 --raid-devices=$(echo $DISKS | wc -w) $RAID_DISKS
+    # Créer le RAID 1 (miroir)
+    sudo mdadm --create --verbose --run --metadata=1.2 $RAID_DEVICE --level=1 --raid-devices=$(echo $DISKS | wc -w) $RAID_DISKS
 
     # LVM et formatage
     sudo pvcreate $RAID_DEVICE
-    sudo vgcreate vg_raid5 $RAID_DEVICE
+    sudo vgcreate vg_raid1 $RAID_DEVICE
 
     # Partition pour les partages
-    sudo lvcreate -L 500M -n share vg_raid5
-    sudo mkfs.ext4 /dev/vg_raid5/share
-    sudo mkdir -p /mnt/raid5_share
-    sudo mount -o noexec,nosuid,nodev /dev/vg_raid5/share /mnt/raid5_share
-    sudo blkid /dev/vg_raid5/share | awk '{print $2 " /mnt/raid5_share ext4 defaults 0 0"}' | sudo tee -a /etc/fstab
+    sudo lvcreate -L 500M -n share vg_raid1
+    sudo mkfs.ext4 /dev/vg_raid1/share
+    sudo mkdir -p /mnt/raid1_share
+    sudo mount -o noexec,nosuid,nodev /dev/vg_raid1/share /mnt/raid1_share
+    sudo blkid /dev/vg_raid1/share | awk '{print $2 " /mnt/raid1_share ext4 defaults 0 0"}' | sudo tee -a /etc/fstab
 
     # Partition pour le web
-    sudo lvcreate -L 500M -n web vg_raid5
-    sudo mkfs.ext4 /dev/vg_raid5/web
-    sudo mkdir -p /mnt/raid5_web
-    sudo mount -o noexec,nosuid,nodev /dev/vg_raid5/web /mnt/raid5_web
-    sudo blkid /dev/vg_raid5/web | awk '{print $2 " /mnt/raid5_web ext4 defaults 0 0"}' | sudo tee -a /etc/fstab
+    sudo lvcreate -L 500M -n web vg_raid1
+    sudo mkfs.ext4 /dev/vg_raid1/web
+    sudo mkdir -p /mnt/raid1_web
+    sudo mount -o noexec,nosuid,nodev /dev/vg_raid1/web /mnt/raid1_web
+    sudo blkid /dev/vg_raid1/web | awk '{print $2 " /mnt/raid1_web ext4 defaults 0 0"}' | sudo tee -a /etc/fstab
 
     # Partition dédiée au backup
-    sudo lvcreate -L 500M -n backup vg_raid5
-    sudo mkfs.ext4 /dev/vg_raid5/backup
-    sudo mkdir -p /mnt/raid5_backup
-    sudo mount -o noexec,nosuid,nodev /dev/vg_raid5/backup /mnt/raid5_backup
-    sudo blkid /dev/vg_raid5/backup | awk '{print $2 " /mnt/raid5_backup ext4 defaults 0 0"}' | sudo tee -a /etc/fstab
+    sudo lvcreate -L 500M -n backup vg_raid1
+    sudo mkfs.ext4 /dev/vg_raid1/backup
+    sudo mkdir -p /mnt/raid1_backup
+    sudo mount -o noexec,nosuid,nodev /dev/vg_raid1/backup /mnt/raid1_backup
+    sudo blkid /dev/vg_raid1/backup | awk '{print $2 " /mnt/raid1_backup ext4 defaults 0 0"}' | sudo tee -a /etc/fstab
 
-    echo "Le dossier de backup est prêt : /mnt/raid5_backup"
+    echo "Le dossier de backup est prêt : /mnt/raid1_backup"
     echo "Utilise ce chemin comme destination dans ton script de sauvegarde."
     systemctl daemon-reload
     df -h
@@ -203,11 +203,11 @@ raid(){
 unauthshare(){
     smb(){
     echo "Installing Samba share"
-    sudo mkdir -p /mnt/raid5_share
+    sudo mkdir -p /mnt/raid1_share
 
-    quotacheck -cug /mnt/raid5_share
-    quotaon /mnt/raid5_share
-    edquota -u nobody -f /mnt/raid5_share -s 500M -h 600M
+    quotacheck -cug /mnt/raid1_share
+    quotaon /mnt/raid1_share
+    edquota -u nobody -f /mnt/raid1_share -s 500M -h 600M
     dnf update -y
     dnf -y install samba samba-client
     systemctl enable smb --now
@@ -216,12 +216,12 @@ unauthshare(){
     firewall-cmd --permanent --add-service=samba
     firewall-cmd --reload
 
-    chown -R nobody:nobody /mnt/raid5_share
-    chmod -R 0777 /mnt/raid5_share
+    chown -R nobody:nobody /mnt/raid1_share
+    chmod -R 0777 /mnt/raid1_share
     
     cat <<EOL > /etc/samba/smb.unauth.conf
 [unauth_share]
-   path = /mnt/raid5_share/
+   path = /mnt/raid1_share/
    browsable = yes
    writable = yes
    guest ok = yes
@@ -244,7 +244,7 @@ EOL
     fi
 
     # SELINUX 
-    /sbin/restorecon -R -v /mnt/raid5_share
+    /sbin/restorecon -R -v /mnt/raid1_share
     setsebool -P samba_export_all_rw 1
 
     systemctl restart smb
@@ -259,7 +259,7 @@ EOL
 
 nfs(){
     echo "Installing NFS share"
-    sudo mkdir -p /mnt/raid5_share
+    sudo mkdir -p /mnt/raid1_share
     dnf update -y
     dnf -y install nfs-utils
     systemctl enable nfs-server --now
@@ -267,7 +267,7 @@ nfs(){
     firewall-cmd --permanent --add-service=mountd
     firewall-cmd --permanent --add-service=rpc-bind
     firewall-cmd --reload
-    echo "/mnt/raid5_share *(rw,sync,no_root_squash)" > /etc/exports
+    echo "/mnt/raid1_share *(rw,sync,root_squash)" > /etc/exports
     exportfs -a
     systemctl restart nfs-server
     echo "NFS services restarted"
@@ -542,7 +542,17 @@ MYSQL_SCRIPT
         sudo touch /etc/vsftpd/user_list
         sudo chmod 600 /etc/vsftpd/user_list
         grep -qxF "$CLIENT" /etc/vsftpd/user_list || echo "$CLIENT" | sudo tee -a /etc/vsftpd/user_list >/dev/null
-        sudo systemctl restart vsftpd
+        
+        mkdir -p /var/run/vsftpd/empty
+        chown root:root /var/run/vsftpd/empty
+        chmod 755 /var/run/vsftpd/empty
+
+        mkdir -p /etc/pki/tls/private /etc/pki/tls/certs
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout /etc/pki/tls/private/vsftpd.key \
+        -out /etc/pki/tls/certs/vsftpd.pem \
+        -subj "/C=BE/ST=Hainaut/L=Mons/O=inox.lan/CN=ftp.$DOMAIN"
+
 
         sudo mkdir -p /srv/samba/public
         sudo chmod 0777 /srv/samba/public
@@ -593,11 +603,57 @@ EOF
         sudo systemctl restart vsftpd
         sudo systemctl restart smb nmb
 
+    cat > /etc/vsftpd/vsftpd.conf <<EOF
+ftpd_banner=Bienvenue sur le serveur FTP sécurisé.
+xferlog_enable=YES
+anonymous_enable=NO
+local_enable=YES
+write_enable=YES
+chroot_local_user=YES
+allow_writeable_chroot=YES
+userlist_enable=YES
+userlist_deny=NO
+local_umask=022
+user_sub_token=\$USER
+local_root=/var/www/\$USER
+secure_chroot_dir=/var/run/vsftpd/empty
+pasv_min_port=30000
+pasv_max_port=30100
+listen_port=21
+listen=YES
+listen_ipv6=NO
+pam_service_name=vsftpd
+ssl_enable=YES
+rsa_cert_file=/etc/pki/tls/certs/vsftpd.pem
+rsa_private_key_file=/etc/pki/tls/private/vsftpd.key
+force_local_data_ssl=YES
+force_local_logins_ssl=YES
+ssl_tlsv1=YES
+ssl_sslv2=NO
+ssl_sslv3=NO
+require_ssl_reuse=NO
+EOF
+
+    systemctl restart vsftpd
+
+
         echo "======== $SUBDOMAIN ========"
         echo "Web: http://$SUBDOMAIN"
         echo "FTP/Samba: $CLIENT/$USER_PASS"
         echo "MySQL: $DB_USER/$DB_PASS"
-    }
+}
+
+    generate_ssl_cert() {
+    DOMAIN=$1
+    mkdir -p /etc/pki/tls/certs /etc/pki/tls/private
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout "/etc/pki/tls/private/$DOMAIN.key" \
+        -out "/etc/pki/tls/certs/$DOMAIN.crt" \
+        -subj "/C=FR/ST=Default/L=Default/O=Default/CN=$DOMAIN"
+}
+
+    log() { echo "[+] $1"; }
+
 
     if [ "$EUID" -ne 0 ]; then
         echo "Exécutez en tant que root !" >&2
@@ -882,8 +938,8 @@ BACKUP_DIR="$MOUNT_POINT/\$TIMESTAMP"
 mkdir -p "\$BACKUP_DIR"
 
 echo "\$(date) - Début sauvegarde" >> "\$LOG_FILE"
-rsync -avz /mnt/raid5_share "\$BACKUP_DIR/" >> "\$LOG_FILE" 2>&1
-rsync -avz /mnt/raid5_web "\$BACKUP_DIR/" >> "\$LOG_FILE" 2>&1
+rsync -avz /mnt/raid1_share "\$BACKUP_DIR/" >> "\$LOG_FILE" 2>&1
+rsync -avz /mnt/raid1_web "\$BACKUP_DIR/" >> "\$LOG_FILE" 2>&1
 
 mkdir -p "\$BACKUP_DIR/user_databases"
 while IFS= read -r USERNAME; do
