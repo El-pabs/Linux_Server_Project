@@ -137,24 +137,55 @@ done
 
 raid(){
     clear
-    echo "Creating RAID..."
+    echo "=== Création d'un RAID logiciel ==="
+
+    # Afficher les devices RAID existants
+    echo "RAID existants :"
+    cat /proc/mdstat
+    echo
+
+    # Demander à l'utilisateur le nom du device RAID à créer
+    read -p "Nom du device RAID à créer (ex: md0, md1) : " RAID_NAME
+    RAID_DEVICE="/dev/$RAID_NAME"
+
+    # Lister les disques disponibles
+    echo "Disques disponibles :"
+    lsblk -d -o NAME,SIZE,TYPE | grep disk
+    echo
+
+    # Demander à l'utilisateur les disques à utiliser (ex: sdb sdc sdd)
+    read -p "Entrez les disques à utiliser pour le RAID (ex: sdb sdc sdd) : " DISKS
+    RAID_DISKS=""
+    for disk in $DISKS; do
+        RAID_DISKS="$RAID_DISKS /dev/$disk"
+    done
+
+    # Installer les outils nécessaires
     sudo dnf install lvm2 mdadm -y
-    sudo mdadm --create --verbose /dev/md0 --level=5 --raid-devices=3 /dev/sdb /dev/sdc /dev/sdd
-    sudo pvcreate /dev/md0
-    sudo vgcreate vg_raid5 /dev/md0
+
+    # Créer le RAID
+    sudo mdadm --create --verbose $RAID_DEVICE --level=5 --raid-devices=$(echo $DISKS | wc -w) $RAID_DISKS
+
+    # LVM et formatage
+    sudo pvcreate $RAID_DEVICE
+    sudo vgcreate vg_raid5 $RAID_DEVICE
     sudo lvcreate -L 500M -n share vg_raid5
     sudo mkfs.ext4 /dev/vg_raid5/share
     sudo mkdir -p /mnt/raid5_share
     sudo mount -o noexec,nosuid,nodev /dev/vg_raid5/share /mnt/raid5_share
     sudo blkid /dev/vg_raid5/share | awk '{print $2 " /mnt/raid5_share ext4 defaults 0 0"}' | sudo tee -a /etc/fstab
+
     sudo lvcreate -L 500M -n web vg_raid5
     sudo mkfs.ext4 /dev/vg_raid5/web
     sudo mkdir -p /mnt/raid5_web
     sudo mount -o noexec,nosuid,nodev /dev/vg_raid5/web /mnt/raid5_web
     sudo blkid /dev/vg_raid5/web | awk '{print $2 " /mnt/raid5_web ext4 defaults 0 0"}' | sudo tee -a /etc/fstab
+
     systemctl daemon-reload
     df -h
+    read -n 1 -s -p "Appuyez sur une touche pour continuer..."
 }
+
 
 
 
@@ -728,93 +759,94 @@ EOL
 
 }
 
-backup(){
-    clear
-    
-    # Display available disks
-    lsblk
-
-    # Prompt user to select a disk for backup
-    read -p "Enter the disk name to use for backup (e.g., sdb): " BACKUP_DISK
-    echo "Selected disk for backup: $BACKUP_DISK"
-
-    # Create a mount point for the backup disk
-    mkdir /mnt/backup
-
-    # Mount the backup disk
-    mount -o noexec,nosuid,nodev /dev/$BACKUP_DISK /mnt/backup
-
-    # Format the disk in ext4
-    mkfs.ext4 /dev/$BACKUP_DISK
-
-    # Create a backup log file
-    touch /mnt/backup/backup.log
-
-    # Append a timestamp to the log file
-    echo "$(date) - Backup started" >> /mnt/backup/backup.log
-
-    # Create a directory with the current date and time
-    TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
-    mkdir /mnt/backup/$TIMESTAMP
-
-    # Use rsync to backup the /mnt/raid5_share directory
-    rsync -avz /mnt/raid5_share /mnt/backup/$TIMESTAMP/raid5_share
-
-    # Use rsync to backup each directory from raid5_web
-    rsync -avz /mnt/raid5_web /mnt/backup/$TIMESTAMP/raid5_web
-
-    # Create a directory to store user databases
-    mkdir /mnt/backup/$TIMESTAMP/user_databases
-
-    # Backup each user's database
-    while IFS= read -r USERNAME; do
-        mysqldump -u root -prootpassword ${USERNAME}_db > /mnt/backup/$TIMESTAMP/user_databases/${USERNAME}_db.sql
-    done < <(pdbedit -L | cut -d: -f1)
-
-    # Append a timestamp to the log file
-    echo "$(date) - User databases backed up" >> /mnt/backup/backup.log
-    
-    # Auto-generate the backup script file
-    SCRIPT_PATH="/path/to/backup.sh"
-    echo "#!/bin/bash
 
 backup(){
     clear
-    lsblk
+    echo "🛠️ Configuration des sauvegardes automatiques (systemd timers)"
 
-    read -p \"Enter the disk name to use for backup (e.g., sdb): \" BACKUP_DISK
-    echo \"Selected disk for backup: \$BACKUP_DISK\"
+    # Créer le script de backup
+    sudo tee /usr/local/bin/auto_backup.sh > /dev/null <<'EOF'
+#!/bin/bash
 
-    mkdir /mnt/backup
-    mount -o noexec,nosuid,nodev /dev/\$BACKUP_DISK /mnt/backup
-    mkfs.ext4 /dev/\$BACKUP_DISK
-    touch /mnt/backup/backup.log
-    echo \"\$(date) - Backup started\" >> /mnt/backup/backup.log
+# Configuration
+LOG_FILE="/mnt/backup/backup.log"
+MOUNT_POINT="/mnt/backup"
 
-    TIMESTAMP=\$(date +\"%Y-%m-%d_%H-%M-%S\")
-    mkdir /mnt/backup/\$TIMESTAMP
-    rsync -avz /mnt/raid5_share /mnt/backup/\$TIMESTAMP/raid5_share
-    rsync -avz /mnt/raid5_web /mnt/backup/\$TIMESTAMP/raid5_web
+# Identifier le disque de backup non monté
+BACKUP_DISK=$(lsblk -lnpo NAME,MOUNTPOINT | awk '$2==""{print $1; exit}')
+[ -z "$BACKUP_DISK" ] && { echo "$(date) - Aucun disque de backup disponible" >> "$LOG_FILE"; exit 1; }
 
-    mkdir /mnt/backup/\$TIMESTAMP/user_databases
-    while IFS= read -r USERNAME; do
-        mysqldump -u root -prootpassword \${USERNAME}_db > /mnt/backup/\$TIMESTAMP/user_databases/\${USERNAME}_db.sql
-    done < <(pdbedit -L | cut -d: -f1)
+# Configurer le montage persistant via UUID
+UUID=$(blkid -s UUID -o value "$BACKUP_DISK")
+mkdir -p "$MOUNT_POINT"
 
-    echo \"\$(date) - User databases backed up\" >> /mnt/backup/backup.log
-}
+if ! grep -q "$MOUNT_POINT" /etc/fstab; then
+    echo "UUID=$UUID $MOUNT_POINT ext4 defaults,noexec,nosuid,nodev,nofail 0 2" | sudo tee -a /etc/fstab
+fi
 
-backup" > $SCRIPT_PATH
+# Monter le disque
+mountpoint -q "$MOUNT_POINT" || mount "$MOUNT_POINT"
 
-    # Make the script executable
-    chmod +x $SCRIPT_PATH
+# Créer le dossier de backup
+TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+BACKUP_DIR="$MOUNT_POINT/$TIMESTAMP"
+mkdir -p "$BACKUP_DIR"
 
-    # Schedule the script with cron
-    (crontab -l 2>/dev/null; echo "*/118 * * * * $SCRIPT_PATH") | crontab -       
-       
-    echo "Backup script created and scheduled with cron."
-    echo "Press any key to continue..."
-    read -n 1 -s key
+# Sauvegarder les données
+echo "$(date) - Début sauvegarde" >> "$LOG_FILE"
+rsync -avz /mnt/raid5_share "$BACKUP_DIR/" >> "$LOG_FILE" 2>&1
+rsync -avz /mnt/raid5_web "$BACKUP_DIR/" >> "$LOG_FILE" 2>&1
+
+# Sauvegarder les bases de données
+mkdir -p "$BACKUP_DIR/user_databases"
+while IFS= read -r USERNAME; do
+    mysqldump -u root -prootpassword "${USERNAME}_db" > "$BACKUP_DIR/user_databases/${USERNAME}_db.sql" 2>> "$LOG_FILE"
+done < <(pdbedit -L | cut -d: -f1)
+
+echo "$(date) - Sauvegarde terminée" >> "$LOG_FILE"
+EOF
+
+    # Permissions
+    sudo chmod +x /usr/local/bin/auto_backup.sh
+
+    # Créer le service systemd
+    sudo tee /etc/systemd/system/backup.service > /dev/null <<'EOF'
+[Unit]
+Description=Sauvegarde automatique des données
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/auto_backup.sh
+EOF
+
+    # Créer le timer systemd (1h58)
+    sudo tee /etc/systemd/system/backup.timer > /dev/null <<'EOF'
+[Unit]
+Description=Déclenche la sauvegarde toutes les 1h58
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=118m
+RandomizedDelaySec=30s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    # Activer le timer
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now backup.timer
+
+    # Nettoyer l'ancienne config cron
+    crontab -l | grep -v "auto_backup.sh" | crontab -
+
+    echo "✅ Sauvegarde configurée avec succès !"
+    echo "▪ Intervalle: Toutes les 1h58"
+    echo "▪ Montage persistant: UUID dans /etc/fstab"
+    echo "▪ Logs: /mnt/backup/backup.log"
+    echo "▪ Status: systemctl status backup.timer"
+    read -n 1 -s -p "Appuyez sur une touche pour continuer..."
 }
 
 
