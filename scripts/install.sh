@@ -31,9 +31,10 @@ display_menu() {
     echo "| 2. NFS                                                               |"
     echo "| 3. Web services management                                           |"
     echo "| 4. NTP Time Server                                                   |"
-    echo "| 5. Install clamav et fail2ban                                                  |"
+    echo "| 5. Install clamav et fail2ban                                        |"
     echo "| 6. Backup                                                            |"
     echo "| 7. Consult Logs Dashboard                                            |"
+    echo "| 8. Installer Netdata (monitoring)                                    |"
     echo "|----------------------------------------------------------------------|"
     echo "| q. Quit                                                              |"
     echo "|----------------------------------------------------------------------|"
@@ -955,6 +956,46 @@ logs() {
     done
 }
 
+install_netdata() {
+    clear
+    echo "Installation de Docker (si pas déjà installé)..."
+    sudo yum install -y docker
+
+    echo "Démarrage et activation de Docker..."
+    sudo systemctl enable --now docker
+
+    echo "Ajout de ec2-user au groupe docker (si pas déjà fait)..."
+    sudo usermod -aG docker ec2-user
+
+    echo "Déploiement du conteneur Netdata..."
+    sudo docker run -d --name=netdata \
+        -p 19999:19999 \
+        -v netdataconfig:/etc/netdata \
+        -v netdatalib:/var/lib/netdata \
+        -v netdatacache:/var/cache/netdata \
+        -v /etc/passwd:/host/etc/passwd:ro \
+        -v /etc/group:/host/etc/group:ro \
+        -v /proc:/host/proc:ro \
+        -v /sys:/host/sys:ro \
+        -v /etc/os-release:/host/etc/os-release:ro \
+        --cap-add SYS_PTRACE \
+        --security-opt apparmor=unconfined \
+        netdata/netdata
+
+    echo "(Optionnel) Ouverture du port 19999 dans Firewalld si actif..."
+    if systemctl is-active --quiet firewalld; then
+        sudo firewall-cmd --zone=docker --add-port=19999/tcp --permanent
+        sudo firewall-cmd --reload
+    else
+        echo "Firewalld non actif, tu dois ouvrir le port 19999 dans les règles de sécurité AWS si nécessaire."
+    fi
+
+    echo "Netdata installé. Accès : http://$(hostname -I | awk '{print $1}'):19999"
+    echo "Déconnecte puis reconnecte ta session SSH pour que ec2-user puisse lancer Docker sans sudo."
+    echo "Appuyez sur une touche pour revenir au menu..."
+    read -n 1 -s
+}
+
 
 main() {
     while true; do
@@ -970,6 +1011,7 @@ main() {
             5) security ;;
             6) backup ;;
             7) logs ;;
+            8) install_netdata ;;
             x) testing ;;
             q|Q) clear && echo "Exiting the web server configuration wizard." && exit ;;
             *) clear && echo "Invalid choice. Please enter a valid option." ;;
