@@ -463,7 +463,7 @@ EOF
         WEB_DIR="$WEB_ROOT/$CLIENT"
         SUBDOMAIN="$CLIENT.$DOMAIN"
         DB_NAME="${CLIENT}_db"
-        DB_USER="${CLIENT}_user"
+        DB_USER="${CLIENT}"
         DB_PASS="sherpa"
         USER_PASS="sherpa"
         IP=$(hostname -I | awk '{print $1}')
