@@ -403,7 +403,6 @@ webservices() {
         1800       ; Retry
         604800     ; Expire
         86400 )    ; Minimum TTL
-
     IN  NS  ns1.$DOMAIN.
     IN  A   $IP
 
@@ -727,7 +726,151 @@ EOF
             -subj "/C=FR/ST=Default/L=Default/O=Default/CN=$DOMAIN"
     }
 
-    log() { echo "[+] $1"; }
+    install_phpmyadmin() {
+        DOMAIN="$1"
+        INSTALL_DIR="$WEB_ROOT/$DOMAIN/phpMyAdmin"
+        TARBALL="phpMyAdmin-latest-all-languages.tar.gz"
+        DOWNLOAD_URL="https://www.phpmyadmin.net/downloads/phpMyAdmin-latest-all-languages.tar.gz"
+
+        log "[*] Installation de wget et tar"
+        dnf install -y wget tar > /dev/null 2>&1
+
+        log "[*] Création du dossier racine $WEB_ROOT/$DOMAIN"
+        mkdir -p "$WEB_ROOT/$DOMAIN"
+
+        cd "$WEB_ROOT/$DOMAIN"
+
+        log "[*] Téléchargement de phpMyAdmin"
+        wget "$DOWNLOAD_URL" -O "$TARBALL" > /dev/null 2>&1
+
+        log "[*] Création du dossier $INSTALL_DIR"
+        mkdir -p "$INSTALL_DIR"
+
+        log "[*] Extraction de l'archive"
+        tar -xvzf "$TARBALL" -C "$INSTALL_DIR" --strip-components=1 > /dev/null 2>&1
+
+        log "[*] Suppression de l'archive $TARBALL"
+        rm -f "$TARBALL"
+
+        log "[*] Attribution des droits à apache"
+        chown -R apache:apache "$INSTALL_DIR"
+        chmod -R 755 "$INSTALL_DIR"
+
+        # --- Création d'une page d'accueil personnalisée ---
+        cat > "$WEB_ROOT/$DOMAIN/index.php" <<EOF
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Accueil $DOMAIN</title>
+    <style>
+        body {
+            background: #232423;
+            color: #fff;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        .container {
+            text-align: center;
+            background: #181818;
+            padding: 40px 60px;
+            border-radius: 18px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+        }
+        .btn {
+            display: inline-block;
+            margin-top: 30px;
+            padding: 18px 44px;
+            font-size: 1.4em;
+            color: #fff;
+            background: linear-gradient(90deg,#ff2222 40%,#ff5c5c 100%);
+            border: none;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            box-shadow: 0 2px 8px rgba(255,0,0,0.13);
+            transition: background 0.18s, transform 0.12s, box-shadow 0.12s;
+        }
+        .btn:hover {
+            background: linear-gradient(90deg,#ff5c5c 40%,#ff2222 100%);
+            transform: translateY(-4px) scale(1.04);
+            box-shadow: 0 8px 24px rgba(255,0,0,0.18);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Bienvenue sur $DOMAIN</h1>
+        <a class="btn" href="/phpMyAdmin">Accéder à phpMyAdmin</a>
+    </div>
+</body>
+</html>
+EOF
+
+        chown apache:apache "$WEB_ROOT/$DOMAIN/index.php"
+
+        # --- Création du VirtualHost principal pour $DOMAIN ---
+        cat > "/etc/httpd/conf.d/${DOMAIN}_main.conf" <<EOF
+<VirtualHost *:80>
+    ServerName $DOMAIN
+    DocumentRoot $WEB_ROOT/$DOMAIN
+
+    Alias /phpMyAdmin $INSTALL_DIR
+    <Directory $INSTALL_DIR>
+        Options FollowSymLinks
+        DirectoryIndex index.php
+        AllowOverride All
+        Require all granted
+    </Directory>
+    <Directory $WEB_ROOT/$DOMAIN>
+        Options FollowSymLinks
+        DirectoryIndex index.php
+        AllowOverride All
+        Require all granted
+    </Directory>
+</VirtualHost>
+EOF
+
+        # Génération du certificat SSL et VirtualHost HTTPS pour le domaine principal
+        mkdir -p /etc/pki/tls/certs /etc/pki/tls/private
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout "/etc/pki/tls/private/${DOMAIN}.key" \
+            -out "/etc/pki/tls/certs/${DOMAIN}.crt" \
+            -subj "/C=FR/ST=Default/L=Default/O=Default/CN=${DOMAIN}"
+
+        cat > "/etc/httpd/conf.d/${DOMAIN}_main-ssl.conf" <<EOF
+<VirtualHost *:443>
+    ServerName $DOMAIN
+    DocumentRoot $WEB_ROOT/$DOMAIN
+    SSLEngine on
+    SSLCertificateFile /etc/pki/tls/certs/${DOMAIN}.crt
+    SSLCertificateKeyFile /etc/pki/tls/private/${DOMAIN}.key
+
+    Alias /phpMyAdmin $INSTALL_DIR
+    <Directory $INSTALL_DIR>
+        Options FollowSymLinks
+        DirectoryIndex index.php
+        AllowOverride All
+        Require all granted
+    </Directory>
+    <Directory $WEB_ROOT/$DOMAIN>
+        Options FollowSymLinks
+        DirectoryIndex index.php
+        AllowOverride All
+        Require all granted
+    </Directory>
+</VirtualHost>
+EOF
+
+        log "[*] Redémarrage du service Apache"
+        systemctl restart httpd
+
+        log "phpMyAdmin installé dans $INSTALL_DIR et accessible via http://$DOMAIN/phpMyAdmin"
+        log "Page d'accueil personnalisée créée sur http://$DOMAIN/"
+    }
 
     if [ "$EUID" -ne 0 ]; then
         echo "Exécutez en tant que root !" >&2
@@ -790,6 +933,7 @@ EOF
         fix_apache_servername
         systemctl enable --now named httpd mariadb vsftpd smb nmb php-fpm
         configure_dns "$DOMAIN"
+        install_phpmyadmin "$DOMAIN"
         create_user "$CLIENT" "$DOMAIN" "$MARIADB_ROOT_PASSWORD"
         systemctl restart httpd
     elif [ "$MODE" = "user" ]; then
@@ -808,6 +952,7 @@ EOF
     echo "Press any key to continue..."
     read -n 1 -s key
 }
+
 
 
 ntp(){
