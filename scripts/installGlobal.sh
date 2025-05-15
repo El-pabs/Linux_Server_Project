@@ -211,11 +211,11 @@ raid(){
 unauthshare(){
     smb(){
     echo "Installing Samba share"
-    sudo mkdir -p /mnt/rais1_share
+    sudo mkdir -p /mnt/raid1_share
 
-    quotacheck -cug /mnt/rais1_share
-    quotaon /mnt/rais1_share
-    edquota -u nobody -f /mnt/rais1_share -s 500M -h 600M
+    quotacheck -cug /mnt/raid1_share
+    quotaon /mnt/raid1_share
+    edquota -u nobody -f /mnt/raid1_share -s 500M -h 600M
     dnf update -y
     dnf -y install samba samba-client
     systemctl enable smb --now
@@ -224,12 +224,12 @@ unauthshare(){
     firewall-cmd --permanent --add-service=samba
     firewall-cmd --reload
 
-    chown -R nobody:nobody /mnt/rais1_share
-    chmod -R 0777 /mnt/rais1_share
+    chown -R nobody:nobody /mnt/raid1_share
+    chmod -R 0777 /mnt/raid1_share
     
     cat <<EOL > /etc/samba/smb.unauth.conf
 [unauth_share]
-   path = /mnt/rais1_share/
+   path = /mnt/raid1_share/
    browsable = yes
    writable = yes
    guest ok = yes
@@ -252,7 +252,7 @@ EOL
     fi
 
     # SELINUX 
-    /sbin/restorecon -R -v /mnt/rais1_share
+    /sbin/restorecon -R -v /mnt/raid1_share
     setsebool -P samba_export_all_rw 1
 
     systemctl restart smb
@@ -267,7 +267,7 @@ EOL
 
 nfs(){
     echo "Installing NFS share"
-    sudo mkdir -p /mnt/rais1_share
+    sudo mkdir -p /mnt/raid1_share
     dnf update -y
     dnf -y install nfs-utils
     systemctl enable nfs-server --now
@@ -275,7 +275,7 @@ nfs(){
     firewall-cmd --permanent --add-service=mountd
     firewall-cmd --permanent --add-service=rpc-bind
     firewall-cmd --reload
-    echo "/mnt/rais1_share *(rw,sync,root_squash)" > /etc/exports
+    echo "/mnt/raid1_share *(rw,sync,root_squash)" > /etc/exports
     exportfs -a
     systemctl restart nfs-server
     echo "NFS services restarted"
@@ -985,8 +985,8 @@ BACKUP_DIR="$MOUNT_POINT/\$TIMESTAMP"
 mkdir -p "\$BACKUP_DIR"
 
 echo "\$(date) - Début sauvegarde" >> "\$LOG_FILE"
-rsync -avz /mnt/rais1_share "\$BACKUP_DIR/" >> "\$LOG_FILE" 2>&1
-rsync -avz /mnt/rais1_web "\$BACKUP_DIR/" >> "\$LOG_FILE" 2>&1
+rsync -avz /mnt/raid1_share "\$BACKUP_DIR/" >> "\$LOG_FILE" 2>&1
+rsync -avz /mnt/raid1_web "\$BACKUP_DIR/" >> "\$LOG_FILE" 2>&1
 
 mkdir -p "\$BACKUP_DIR/user_databases"
 while IFS= read -r USERNAME; do
