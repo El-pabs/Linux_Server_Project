@@ -547,17 +547,58 @@ EOF
 <head>
     <title>$SUBDOMAIN</title>
     <style>
-        .file-list { border: 1px solid #ddd; padding: 15px; }
-        .file-item { font-family: monospace; margin-bottom: 5px; }
+        body {
+            background: #232423;
+            color: #fff;
+            font-family: 'Segoe UI', Arial, sans-serif;
+        }
+        .file-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 30px;
+            justify-content: center;
+            margin-top: 40px;
+        }
+        .file-card {
+            background: #1a1616;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+            min-width: 180px;
+            min-height: 80px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.12s, box-shadow 0.12s;
+            cursor: pointer;
+        }
+        .file-card:hover {
+            transform: translateY(-6px) scale(1.03);
+            box-shadow: 0 6px 20px rgba(255,0,0,0.2);
+            background: #251a1a;
+        }
+        .file-card-link {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+            color: #ff2222;
+            font-size: 1.3em;
+            text-decoration: none;
+            font-weight: 500;
+            letter-spacing: 0.02em;
+        }
     </style>
 </head>
 <body>
-    <h1>Bienvenue sur $SUBDOMAIN</h1>
+    <h1 style="text-align:center;">Bienvenue sur $SUBDOMAIN</h1>
     <div class="file-list">
         <?php
         foreach (scandir(__DIR__) as \$file) {
             if (!in_array(\$file, ['.', '..', 'index.php'])) {
-                echo '<div class="file-item"><a href="' . rawurlencode(\$file) . '" download>' . htmlspecialchars(\$file) . '</a></div>';
+                echo '<div class="file-card">';
+                echo '<a class="file-card-link" href="' . rawurlencode(\$file) . '" download>' . htmlspecialchars(\$file) . '</a>';
+                echo '</div>';
             }
         }
         ?>
