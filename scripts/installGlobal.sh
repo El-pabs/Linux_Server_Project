@@ -7,15 +7,15 @@ BLUE='\e[38;5;33m'
 NC='\033[0m' 
 
 updatedb
-systemctl enable --now cockpit
+
 dnf install firewalld
 y
 systemctl enable --now firewalld
 systemctl start firewalld
-firewall-cmd --permanent --zone=public --add-service=cockpit
+
 firewall-cmd --reload
 
-dnf -y install nfs-utils samba mlocate bind chrony fail2ban vsftpd rsync clamav clamav-scanner-systemd clamav-update cockpit bind-utils httpd php php-mysqlnd mariadb-server phpmyadmin
+dnf -y install nfs-utils samba mlocate bind chrony fail2ban vsftpd rsync bind-utils httpd php php-mysqlnd mariadb-server phpmyadmin
 
 
 clear
@@ -31,7 +31,7 @@ display_menu() {
     echo "| 2. NFS                                                               |"
     echo "| 3. Web services management                                           |"
     echo "| 4. NTP Time Server                                                   |"
-    echo "| 5. Install clamav et fail2ban                                        |"
+    echo "| 5. Install fail2ban                                        |"
     echo "| 6. Backup                                                            |"
     echo "| 7. Consult Logs Dashboard                                            |"
     echo "| 8. Installer Netdata (monitoring)                                    |"
