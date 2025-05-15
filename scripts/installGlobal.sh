@@ -31,7 +31,7 @@ display_menu() {
     echo "| 2. NFS                                                               |"
     echo "| 3. Web services management                                           |"
     echo "| 4. NTP Time Server                                                   |"
-    echo "| 5. Install fail2ban                                        |"
+    echo "| 5. Install security services                                         |"
     echo "| 6. Backup                                                            |"
     echo "| 7. Consult Logs Dashboard                                            |"
     echo "| 8. Installer Netdata (monitoring)                                    |"
@@ -1125,7 +1125,112 @@ EOF
 
     echo "Fail2Ban installed and configured successfully."
 }
+configure_inotify() {
+    #!/bin/bash
+
+    echo "Installation de inotify-tools..."
+    sudo dnf install -y inotify-tools
+
+    echo "Création du script de surveillance..."
+
+    cat << 'EOF' | sudo tee /usr/local/bin/inotify_monitor.sh > /dev/null
+#!/bin/bash
+LOGFILE="/var/log/inotify_monitor.log"
+WATCHED_DIRS="/etc /var/www"
+
+inotifywait -m -r -e modify,create,delete,move ${WATCHED_DIRS} --format '%T %w %f %e' --timefmt '%F %T' |
+while read date time dir file event; do
+    echo "[$date $time] Event: $event on $dir$file" >> "$LOGFILE"
+done
+EOF
+
+    sudo chmod +x /usr/local/bin/inotify_monitor.sh
+
+    echo "Création d'un service systemd pour lancer la surveillance au démarrage..."
+
+    cat << 'EOF' | sudo tee /etc/systemd/system/inotify-monitor.service > /dev/null
+[Unit]
+Description=Inotify File Monitoring Service
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/inotify_monitor.sh
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    echo "Activation et démarrage du service de surveillance..."
+    sudo systemctl daemon-reexec
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now inotify-monitor.service
+
+    echo "Surveillance des fichiers système activée. Les événements sont enregistrés dans /var/log/inotify_monitor.log"
+
+}
+configure_clamav(){
+    #!/bin/bash
+
+    echo "Installation et mise à jour de ClamAV..."
+    sudo dnf update -y
+    sudo dnf install -y clamav clamav-update
+
+    echo "Mise à jour de la base de signatures..."
+    if ! systemctl is-active --quiet clamav-freshclam; then
+        sudo freshclam
+    fi
+
+    echo "Création du dossier de log ClamAV..."
+    sudo mkdir -p /var/log/clamav
+
+    echo "Configuration du scan automatique quotidien ciblé..."
+    SCAN_CMD="clamscan -r /var/www /home /mnt/raid5_share --exclude-dir=^/proc --exclude-dir=^/sys --exclude-dir=^/dev --infected --quiet --log=/var/log/clamav/daily_scan.log"
+    if ! grep -q "$SCAN_CMD" /etc/crontab; then
+        echo "0 2 * * * root $SCAN_CMD" | sudo tee -a /etc/crontab > /dev/null
+    else
+        echo "Tâche cron déjà existante."
+    fi
+
+    echo "Activation uniquement de la mise à jour automatique..."
+    sudo systemctl enable --now clamav-freshclam
+
+    echo "ClamAV est configuré pour des scans quotidiens ciblés sans démon actif."
+
+}
+configure_SELinux(){
+    #!/bin/bash
+
+    # Vérifier si SELinux est ok
+    if ! command -v getenforce >/dev/null 2>&1; then
+        echo "Installation de SELinux utils"
+        sudo dnf install -y policycoreutils selinux-policy selinux-policy-targeted
+    fi
+
+    # statut actuel
+    echo "Statut actuel de SELinux : $(getenforce)"
+
+    # Modifier le fichier de conf si pas déjà enforcing
+    SELINUX_CONF="/etc/selinux/config"
+    if grep -q "^SELINUX=disabled" "$SELINUX_CONF"; then
+        echo "Activation de SELinux en mode enforcing (redémarrage requis)"
+        sudo sed -i 's/^SELINUX=disabled/SELINUX=enforcing/' "$SELINUX_CONF"
+        setenforce 1 || echo "Redémarre le système pour appliquer le changement."
+    elif grep -q "^SELINUX=permissive" "$SELINUX_CONF"; then
+        echo "Passage en mode enforcing (immédiat)"
+        sudo sed -i 's/^SELINUX=permissive/SELINUX=enforcing/' "$SELINUX_CONF"
+        setenforce 1
+    else
+        echo "SELinux est déjà actif en mode enforcing."
+    fi
+
+    # Affiche le statut final
+    echo "Statut final de SELinux : $(getenforce)"
+}
 configure_fail2ban
+configure_inotify
+configure_clamav
+configure_SELinux
 }
 
 
