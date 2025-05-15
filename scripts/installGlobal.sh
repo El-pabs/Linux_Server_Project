@@ -883,33 +883,45 @@ security(){
 configure_fail2ban() {
     echo "Installing Fail2Ban..."
 
-    # Check if Fail2Ban is already installed
+    # Vérifie si Fail2Ban est installé
     if ! command -v fail2ban-server &> /dev/null; then
         sudo dnf install -y fail2ban || { echo "Failed to install Fail2Ban. Exiting."; exit 1; }
     else
         echo "Fail2Ban is already installed."
     fi
 
-    # Enable and start the Fail2Ban service
+    # Active et démarre le service Fail2Ban
     sudo systemctl enable fail2ban || { echo "Failed to enable Fail2Ban. Exiting."; exit 1; }
     sudo systemctl start fail2ban || { echo "Failed to start Fail2Ban. Exiting."; exit 1; }
 
-    # Create the configuration directory if necessary
+    # Crée le répertoire de configuration si besoin
     sudo mkdir -p /etc/fail2ban/jail.d
 
-    # Configure Fail2Ban to protect the SSH service
+    # --- Correction du log vsftpd ---
+    # Crée le fichier de log vsftpd s'il n'existe pas
+    sudo touch /var/log/vsftpd.log
+    sudo chown root:root /var/log/vsftpd.log
+    sudo chmod 644 /var/log/vsftpd.log
+
+    # S'assure que vsftpd écrit dans ce fichier
+    sudo grep -q '^xferlog_enable=YES' /etc/vsftpd/vsftpd.conf || echo "xferlog_enable=YES" | sudo tee -a /etc/vsftpd/vsftpd.conf
+    sudo grep -q '^xferlog_file=/var/log/vsftpd.log' /etc/vsftpd/vsftpd.conf || echo "xferlog_file=/var/log/vsftpd.log" | sudo tee -a /etc/vsftpd/vsftpd.conf
+    sudo systemctl restart vsftpd
+
+    # --- Jail SSH : backend systemd (pas besoin de logpath) ---
     cat <<EOF | sudo tee /etc/fail2ban/jail.d/sshd.local > /dev/null
 [sshd]
 enabled = true
+backend = systemd
 port = 22
 action = %(action_mwl)s
-logpath = %(sshd_log)s
 maxretry = 3
 bantime = 600
 findtime = 600
+ignoreip = 192.168.42.2
 EOF
 
-    # Configure Fail2Ban to protect the FTP service
+    # --- Jail vsftpd ---
     cat <<EOF | sudo tee /etc/fail2ban/jail.d/vsftpd.local > /dev/null
 [vsftpd]
 enabled = true
@@ -919,23 +931,17 @@ logpath = /var/log/vsftpd.log
 maxretry = 3
 bantime = 600
 findtime = 600
+ignoreip = 192.168.1.101
 EOF
 
-    # Add IPs to whitelist
-    # Whitelist IP admin SSH
-    echo "ignoreip = 192.168.42.2" | sudo tee -a /etc/fail2ban/jail.d/sshd.local > /dev/null
-
-    # Whitelist IP admin FTP
-    echo "ignoreip = 192.168.1.101" | sudo tee -a /etc/fail2ban/jail.d/vsftpd.local > /dev/null
-
-    # Restart Fail2Ban to apply the changes
+    # Redémarre Fail2Ban pour appliquer les changements
     sudo systemctl restart fail2ban || { echo "Failed to restart Fail2Ban. Exiting."; exit 1; }
 
     echo "Fail2Ban installed and configured successfully."
-    }
-
-    configure_fail2ban
 }
+configure_fail2ban
+}
+
 
 backup(){
     clear
