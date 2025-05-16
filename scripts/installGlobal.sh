@@ -1199,15 +1199,13 @@ configure_clamav(){
 
 }
 configure_SELinux(){
-    #!/bin/bash
-
-    # Vérifier si SELinux est ok
+    # Vérifier si SELinux utils sont installés
     if ! command -v getenforce >/dev/null 2>&1; then
-        echo "Installation de SELinux utils"
+        echo "Installation des outils SELinux..."
         sudo dnf install -y policycoreutils selinux-policy selinux-policy-targeted
     fi
 
-    # statut actuel
+    # Statut actuel
     echo "Statut actuel de SELinux : $(getenforce)"
 
     # Modifier le fichier de conf si pas déjà enforcing
@@ -1215,18 +1213,51 @@ configure_SELinux(){
     if grep -q "^SELINUX=disabled" "$SELINUX_CONF"; then
         echo "Activation de SELinux en mode enforcing (redémarrage requis)"
         sudo sed -i 's/^SELINUX=disabled/SELINUX=enforcing/' "$SELINUX_CONF"
-        setenforce 1 || echo "Redémarre le système pour appliquer le changement."
+        sudo setenforce 1 || echo "Redémarre le système pour appliquer le changement."
     elif grep -q "^SELINUX=permissive" "$SELINUX_CONF"; then
         echo "Passage en mode enforcing (immédiat)"
         sudo sed -i 's/^SELINUX=permissive/SELINUX=enforcing/' "$SELINUX_CONF"
-        setenforce 1
+        sudo setenforce 1
     else
         echo "SELinux est déjà actif en mode enforcing."
+    fi
+
+    # Correction du contexte pour vsftpd.log
+    if [ -f /var/log/vsftpd.log ]; then
+        echo "Correction du contexte SELinux pour /var/log/vsftpd.log"
+        sudo semanage fcontext -a -t ftpd_log_t "/var/log/vsftpd.log"
+        sudo restorecon -v /var/log/vsftpd.log
+    fi
+
+    # Configuration spécifique à Samba pour les dossiers privés
+    echo "Configuration SELinux pour Samba :"
+    
+    # 1. Autoriser l'accès aux home directories
+    sudo setsebool -P samba_enable_home_dirs=1
+    
+    # 2. Autoriser l'écriture pour les partages RW
+    sudo setsebool -P samba_export_all_rw=1
+    
+    # 3. Appliquer le contexte aux dossiers utilisateurs existants
+    if [ -d "/home" ]; then
+        echo "Application du contexte samba_share_t aux home directories"
+        sudo semanage fcontext -a -t samba_share_t "/home/.*"
+        sudo restorecon -R /home
+    fi
+    
+    # 4. Correction pour les partages personnalisés (ex: /mnt/raid1_share)
+    SHARE_PATH="/mnt/raid1_share"
+    if [ -d "$SHARE_PATH" ]; then
+        echo "Correction du contexte pour $SHARE_PATH"
+        sudo semanage fcontext -a -t samba_share_t "${SHARE_PATH}(/.*)?"
+        sudo restorecon -R "$SHARE_PATH"
     fi
 
     # Affiche le statut final
     echo "Statut final de SELinux : $(getenforce)"
 }
+
+# Appels des fonctions de configuration (ne change pas)
 configure_fail2ban
 configure_inotify
 configure_clamav
