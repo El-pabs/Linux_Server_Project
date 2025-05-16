@@ -1169,35 +1169,6 @@ EOF
     echo "Surveillance des fichiers système activée. Les événements sont enregistrés dans /var/log/inotify_monitor.log"
 
 }
-configure_clamav(){
-    #!/bin/bash
-
-    echo "Installation et mise à jour de ClamAV..."
-    sudo dnf update -y
-    sudo dnf install -y clamav clamav-update
-
-    echo "Mise à jour de la base de signatures..."
-    if ! systemctl is-active --quiet clamav-freshclam; then
-        sudo freshclam
-    fi
-
-    echo "Création du dossier de log ClamAV..."
-    sudo mkdir -p /var/log/clamav
-
-    echo "Configuration du scan automatique quotidien ciblé..."
-    SCAN_CMD="clamscan -r /var/www /home /mnt/raid5_share --exclude-dir=^/proc --exclude-dir=^/sys --exclude-dir=^/dev --infected --quiet --log=/var/log/clamav/daily_scan.log"
-    if ! grep -q "$SCAN_CMD" /etc/crontab; then
-        echo "0 2 * * * root $SCAN_CMD" | sudo tee -a /etc/crontab > /dev/null
-    else
-        echo "Tâche cron déjà existante."
-    fi
-
-    echo "Activation uniquement de la mise à jour automatique..."
-    sudo systemctl enable --now clamav-freshclam
-
-    echo "ClamAV est configuré pour des scans quotidiens ciblés sans démon actif."
-
-}
 configure_SELinux(){
     # Vérifier si SELinux utils sont installés
     if ! command -v getenforce >/dev/null 2>&1; then
@@ -1228,6 +1199,17 @@ configure_SELinux(){
         sudo restorecon -v /var/log/vsftpd.log
     fi
 
+    # Correction pour /var/www pour accès FTP
+    if [ -d "/var/www" ]; then
+        echo "Correction du contexte SELinux pour /var/www"
+        # Utiliser -m (modify) si déjà défini pour éviter l'erreur "already defined"
+        sudo semanage fcontext -m -t public_content_rw_t "/var/www(/.*)?"
+        sudo restorecon -Rv /var/www
+    fi
+
+    sudo setsebool -P allow_ftpd_full_access=1
+
+
     # Configuration spécifique à Samba pour les dossiers privés
     echo "Configuration SELinux pour Samba :"
     sudo setsebool -P samba_enable_home_dirs=1
@@ -1257,6 +1239,7 @@ configure_SELinux(){
 
     echo "Statut final de SELinux : $(getenforce)"
 }
+
 
 
 # Appels des fonctions de configuration (ne change pas)
