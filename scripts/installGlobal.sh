@@ -1205,7 +1205,6 @@ configure_SELinux(){
         sudo dnf install -y policycoreutils selinux-policy selinux-policy-targeted
     fi
 
-    # Statut actuel
     echo "Statut actuel de SELinux : $(getenforce)"
 
     # Modifier le fichier de conf si pas déjà enforcing
@@ -1231,21 +1230,24 @@ configure_SELinux(){
 
     # Configuration spécifique à Samba pour les dossiers privés
     echo "Configuration SELinux pour Samba :"
-    
-    # 1. Autoriser l'accès aux home directories
     sudo setsebool -P samba_enable_home_dirs=1
-    
-    # 2. Autoriser l'écriture pour les partages RW
     sudo setsebool -P samba_export_all_rw=1
-    
-    # 3. Appliquer le contexte aux dossiers utilisateurs existants
-    if [ -d "/home" ]; then
-        echo "Application du contexte samba_share_t aux home directories"
-        sudo semanage fcontext -a -t samba_share_t "/home/.*"
-        sudo restorecon -R /home
-    fi
-    
-    # 4. Correction pour les partages personnalisés (ex: /mnt/raid1_share)
+
+    # Appliquer samba_share_t uniquement sur les dossiers Samba privés (exemple)
+    for d in /home/*/samba; do
+        [ -d "$d" ] && sudo semanage fcontext -a -t samba_share_t "${d}(/.*)?"
+        [ -d "$d" ] && sudo restorecon -Rv "$d"
+    done
+
+    # Restaurer le contexte ssh_home_t sur tous les dossiers .ssh et fichiers de clés
+    for u in /home/*; do
+        [ -d "$u/.ssh" ] && sudo restorecon -Rv "$u/.ssh"
+    done
+
+    # Idem pour root
+    [ -d /root/.ssh ] && sudo restorecon -Rv /root/.ssh
+
+    # Correction pour les partages personnalisés (ex: /mnt/raid1_share)
     SHARE_PATH="/mnt/raid1_share"
     if [ -d "$SHARE_PATH" ]; then
         echo "Correction du contexte pour $SHARE_PATH"
@@ -1253,9 +1255,9 @@ configure_SELinux(){
         sudo restorecon -R "$SHARE_PATH"
     fi
 
-    # Affiche le statut final
     echo "Statut final de SELinux : $(getenforce)"
 }
+
 
 # Appels des fonctions de configuration (ne change pas)
 configure_fail2ban
